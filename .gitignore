@@ -19,6 +19,7 @@ venv/
 env/
 ENV/
 .venv/
+.venv-rocm57/
 
 # IDE
 .vscode/

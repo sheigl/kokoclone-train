@@ -73,11 +73,12 @@ class HuBERTWrapper:
             audio = audio.squeeze()
 
         if sr != 16000:
-            import librosa
+            # Use torchaudio for resampling (replaces librosa to avoid numba/llvmlite dep)
+            import torchaudio
 
-            audio_np = audio.cpu().numpy()
-            audio_np = librosa.resample(audio_np, orig_sr=sr, target_sr=16000)
-            audio = torch.from_numpy(audio_np).to(self.device)
+            audio = torchaudio.functional.resample(
+                audio, orig_freq=sr, new_freq=16000,
+            )
 
         with torch.no_grad():
             # transformers HuBERT expects 2D input [batch, sequence_length]

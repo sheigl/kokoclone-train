@@ -1,0 +1,31 @@
+{
+  "_comment": "Default training configuration for kokoclone-train. Copy to voices/{name}/training_config.json to override per voice.",
+
+  "epochs": 1000,
+  "batch_size": null,
+  "checkpoint_interval": 10,
+
+  "use_decoder": true,
+
+  "device": "auto",
+
+  "optimizer": {
+    "lr_g": 2e-4,
+    "lr_d": 2e-4,
+    "betas": [0.8, 0.99],
+    "weight_decay": 1e-5,
+    "scheduler_gamma": 0.999
+  },
+
+  "loss_weights": {
+    "lambda_mel": 100.0,
+    "lambda_audio_l1": 200.0,
+    "lambda_fm": 2.0
+  },
+
+  "xtts_augment": false,
+  "aug_ratio": 0.3,
+  "xtts_pool_size": 200,
+
+  "pitch_adjustment": 0.0
+}
