@@ -4,6 +4,31 @@ All notable changes to kokoclone-train will be documented in this file.
 
 ## [Unreleased]
 
+### August 8, 2026 — `pytorch-vulkan` backend shipped: kokoclone-train trains on the RX 470 via Vulkan
+
+The RX 470 (Polaris) cannot run ROCm compute (PCH PCIe slot lacks atomic ops;
+KFD rejects the card). We built a **generic native Vulkan `PrivateUse1`
+PyTorch backend** in `~/code/pytorch-vulkan` (package `pytorch_vulkan`,
+device `"vulkan"`, explicit `pytorch_vulkan.init()`) and integrated it into
+this project.
+
+- `detect_device("vulkan")` + `_vulkan_available()` lazy probe +
+  `_available_summary` + `empty_cache(vulkan)` in `rvc_assets.py`
+- `--device vulkan` on train/train-only/extract
+- `torch.load` uses `map_location="cpu"`; checkpoint saves cast state dicts
+  to CPU (torch.save cannot `.cpu()` vulkan tensors via storage.set_)
+- **Verified: full SynthesizerTrn (29.7M params + MPD/MSD) trains on the
+  RX 470 via Vulkan** on the real am_jefferson dataset (forward+backward+Adam),
+  checkpoint save/load works, fp16 pretrained checkpoint loads.
+- Backend op coverage: GEMM/Linear, Conv1d/2d/Transpose1d/2d, LayerNorm,
+  softmax, embedding, elementwise, losses, view ops — forward+backward with
+  CPU-parity + gradcheck. 82 backend tests green.
+- **Performance (honest): vulkan ~0.17x CPU on the full model** (806ms vs
+  135ms/step) — correctness-first kernels aren't competitive with AVX-512
+  on this 2016 card. The "faster than CPU" speed bar is NOT met; closing
+  the gap needs a kernel-optimization pass (see the plan doc).
+- Full context: `~/code/pytorch-vulkan/docs/VULKAN_BACKEND_PLAN.md`.
+
 ### August 8, 2026 — `pytorch-vulkan` backend (planned)
 
 The RX 470 cannot run ROCm compute on this machine (PCH PCIe slot lacks
