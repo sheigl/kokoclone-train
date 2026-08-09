@@ -116,6 +116,48 @@ def _cleanup_old_checkpoints(temp_dir: Path, voice_name: str, keep: int = 3) -> 
         oldest.unlink(missing_ok=True)
 
 
+def _vulkan_adam_step(optimizer, device_type: str) -> bool:
+    """Perform an Adam optimizer step via the native vulkan fused kernel.
+
+    torch.optim.Adam on vulkan tensors dispatches ~8 elementwise ops per
+    param (each with a GPU submit+wait), which dominates step time for
+    ~45M params. When `device_type == "vulkan"` and pytorch_vulkan is
+    available, apply the fused ``adam_update`` kernel instead.
+
+    Returns True if the native path ran (and the caller should skip the
+    standard ``optimizer.step()``).
+    """
+    if device_type != "vulkan":
+        return False
+    try:
+        import pytorch_vulkan
+        from pytorch_vulkan._C import adam_update
+    except Exception:
+        return False
+
+    state = optimizer.state
+    for group in optimizer.param_groups:
+        lr = group.get("lr", 1e-3)
+        betas = group.get("betas", (0.9, 0.999))
+        eps = group.get("eps", 1e-8)
+        for p in group["params"]:
+            if p.grad is None or p.device.type != "vulkan":
+                continue
+            if p not in state:
+                state[p] = {
+                    "step": 0,
+                    "exp_avg": torch.zeros_like(p),
+                    "exp_avg_sq": torch.zeros_like(p),
+                }
+            st = state[p]
+            st["step"] += 1
+            adam_update(
+                p, p.grad, st["exp_avg"], st["exp_avg_sq"],
+                st["step"], lr, betas[0], betas[1], eps,
+            )
+    return True
+
+
 # ── Training dataset ───────────────────────────────────────────────────────
 
 class ContentFeatureDataset(Dataset):
@@ -907,55 +949,13 @@ def _train_model(
     def _unwrap_model(m):
         return m.module if isinstance(m, torch.nn.DataParallel) else m
 
-def _state_dict_to_cpu(sd):
-    """Move every tensor in a state dict to CPU for serialization.
+    def _state_dict_to_cpu(sd):
+        """Move every tensor in a state dict to CPU for serialization.
 
-    torch.save() calls .cpu() on each tensor internally, which our vulkan
-    backend cannot do via storage.set_. Moving here avoids that path.
-    """
-    return {k: v.detach().to("cpu") for k, v in sd.items()}
-
-
-def _vulkan_adam_step(optimizer, device_type: str) -> bool:
-    """Perform an Adam optimizer step via the native vulkan fused kernel.
-
-    torch.optim.Adam on vulkan tensors dispatches ~8 elementwise ops per
-    param (each with a GPU submit+wait), which dominates step time for
-    ~45M params. When `device_type == "vulkan"` and pytorch_vulkan is
-    available, apply the fused ``adam_update`` kernel instead.
-
-    Returns True if the native path ran (and the caller should skip the
-    standard ``optimizer.step()``).
-    """
-    if device_type != "vulkan":
-        return False
-    try:
-        import pytorch_vulkan
-        from pytorch_vulkan._C import adam_update
-    except Exception:
-        return False
-
-    state = optimizer.state
-    for group in optimizer.param_groups:
-        lr = group.get("lr", 1e-3)
-        betas = group.get("betas", (0.9, 0.999))
-        eps = group.get("eps", 1e-8)
-        for p in group["params"]:
-            if p.grad is None or p.device.type != "vulkan":
-                continue
-            if p not in state:
-                state[p] = {
-                    "step": 0,
-                    "exp_avg": torch.zeros_like(p),
-                    "exp_avg_sq": torch.zeros_like(p),
-                }
-            st = state[p]
-            st["step"] += 1
-            adam_update(
-                p, p.grad, st["exp_avg"], st["exp_avg_sq"],
-                st["step"], lr, betas[0], betas[1], eps,
-            )
-    return True
+        torch.save() calls .cpu() on each tensor internally, which our vulkan
+        backend cannot do via storage.set_. Moving here avoids that path.
+        """
+        return {k: v.detach().to("cpu") for k, v in sd.items()}
 
     # ── Load per-chunk metadata ───────────────────────────────────────────────
     feature_dir = temp_dir / "2_feature"
